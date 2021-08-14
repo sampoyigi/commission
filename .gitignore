@@ -1,0 +1,6 @@
+.DS_Store
+.idea
+
+# Ignore all vendor files included by composer and the lock file
+/vendor
+composer.lock
