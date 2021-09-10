@@ -33,7 +33,7 @@ class Manager
     {
         return $order->orderTotalsQuery()
             ->where('order_id', $order->getKey())
-            ->where('is_summable', TRUE)
+            ->where('code', 'subtotal')
             ->sum('value');
     }
 
