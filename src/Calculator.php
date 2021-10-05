@@ -5,7 +5,7 @@ namespace SamPoyigi\Commission;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 
-class Manager
+class Calculator
 {
     public $orderTotal;
 
