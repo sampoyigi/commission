@@ -2,47 +2,104 @@
 
 namespace SamPoyigi\Commission;
 
+use Closure;
+use Illuminate\Database\Eloquent\Model;
+
 class Manager
 {
-    protected $addOrderTotal = TRUE;
+    public $orderTotal;
 
-    protected $orderTotalLabel;
+    /**
+     * @var \Illuminate\Database\Eloquent\Model
+     */
+    protected $order;
 
-    public function calculate($order, array $commissionRules)
+    protected $rules;
+
+    protected $orderTotalScope;
+
+    protected $whenMatched;
+
+    protected $beforeFilter;
+
+    public static function on(Model $order)
     {
-        $orderTotal = $this->getOrderTotal($order);
+        $instance = new static;
+        $instance->order = $order;
 
-        $commissionFee = collect($commissionRules)
-            ->map(function ($rule) use ($orderTotal) {
-                return $this->processRule($rule, $orderTotal);
+        return $instance;
+    }
+
+    public function withRules(array $rules)
+    {
+        $this->rules = $rules;
+
+        return $this;
+    }
+
+    public function applyOrderTotalScope(Closure $callback)
+    {
+        $this->orderTotalScope = $callback;
+
+        return $this;
+    }
+
+    public function whenMatched(Closure $callback)
+    {
+        $this->whenMatched = $callback;
+
+        return $this;
+    }
+
+    public function beforeFilter(Closure $callback)
+    {
+        $this->beforeFilter = $callback;
+
+        return $this;
+    }
+
+    public function calculate()
+    {
+        $this->calculateOrderTotal();
+
+        return collect($this->rules)
+            ->map(function ($rule) {
+                return $this->processRule($rule);
             })
-            ->filter(function ($rule) use ($orderTotal, $order) {
-                return $this->evalRule($rule, $orderTotal, $order);
+            ->filter(function ($rule) {
+                return $this->filterRule($rule);
             })
-            ->reduce(function ($commissionFee, $rule) use ($order) {
-                if ($this->addOrderTotal)
-                    $this->addCommission($rule, $order);
+            ->reduce(function ($commissionFee, $rule) {
+                if ($this->whenMatched)
+                    call_user_func($this->whenMatched, $rule, $this->orderTotal);
 
                 return $commissionFee + $rule->calculatedFee;
             }, 0);
-
-        return [$orderTotal, $commissionFee];
     }
 
-    protected function getOrderTotal($order)
+    public function getOrderTotal()
     {
-        return $order->orderTotalsQuery()
-            ->where('order_id', $order->getKey())
-            ->where('code', 'subtotal')
-            ->sum('value');
+        return $this->orderTotal;
     }
 
-    protected function processRule($rule, $orderTotal)
+    protected function calculateOrderTotal()
+    {
+        $query = $this->order->orderTotalsQuery()
+            ->where('order_id', $this->order->getKey())
+            ->where('code', 'subtotal');
+
+        if ($this->orderTotalScope)
+            call_user_func($this->orderTotalScope, $query);
+
+        $this->orderTotal = $query->sum('value');
+    }
+
+    protected function processRule($rule)
     {
         $rule = (object)$rule;
 
         $fee = $rule->fee_type === 'percent'
-            ? ($rule->fee / 100) * $orderTotal
+            ? ($rule->fee / 100) * $this->orderTotal
             : $rule->fee;
 
         $rule->calculatedFee = number_format($fee, 2, '.', '');
@@ -50,54 +107,17 @@ class Manager
         return $rule;
     }
 
-    protected function evalRule($rule, $orderTotal, $order)
+    protected function filterRule($rule)
     {
-        if (!empty($rule->order_type) AND $order->order_type !== $rule->order_type)
+        if ($this->beforeFilter AND call_user_func($this->beforeFilter, $rule, $this->orderTotal))
             return FALSE;
 
         if ($rule->type === 'below')
-            return $orderTotal < $rule->total;
+            return $this->orderTotal < $rule->total;
 
         if ($rule->type === 'above')
-            return $orderTotal >= $rule->total;
+            return $this->orderTotal >= $rule->total;
 
         return TRUE;
-    }
-
-    protected function addCommission($rule, $order)
-    {
-        $titlePrefix = $rule->fee_type === 'percent'
-            ? '%'.$rule->fee
-            : currency_format($rule->fee);
-
-        $order->addOrUpdateOrderTotal([
-            'code' => 'commission',
-            'title' => sprintf($this->orderTotalLabel, $titlePrefix),
-            'value' => 0 - $rule->calculatedFee,
-            'priority' => 9999,
-            'is_summable' => FALSE,
-        ]);
-    }
-
-    /**
-     * @param string $orderTotalLabel
-     * @return self
-     */
-    public function setOrderTotalLabel(string $orderTotalLabel)
-    {
-        $this->orderTotalLabel = $orderTotalLabel;
-
-        return $this;
-    }
-
-    /**
-     * @param bool $addOrderTotal
-     * @return self
-     */
-    public function addOrderTotal(bool $addOrderTotal = TRUE)
-    {
-        $this->addOrderTotal = $addOrderTotal;
-
-        return $this;
     }
 }
