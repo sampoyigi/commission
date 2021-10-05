@@ -16,8 +16,8 @@ class Manager
             ->map(function ($rule) use ($orderTotal) {
                 return $this->processRule($rule, $orderTotal);
             })
-            ->filter(function ($rule) use ($orderTotal) {
-                return $this->evalRule($rule, $orderTotal);
+            ->filter(function ($rule) use ($orderTotal, $order) {
+                return $this->evalRule($rule, $orderTotal, $order);
             })
             ->reduce(function ($commissionFee, $rule) use ($order) {
                 if ($this->addOrderTotal)
@@ -50,8 +50,11 @@ class Manager
         return $rule;
     }
 
-    protected function evalRule($rule, $orderTotal)
+    protected function evalRule($rule, $orderTotal, $order)
     {
+        if (!empty($rule->order_type) AND $order->order_type !== $rule->order_type)
+            return FALSE;
+
         if ($rule->type === 'below')
             return $orderTotal < $rule->total;
 
