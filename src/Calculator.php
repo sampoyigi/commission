@@ -14,6 +14,9 @@ class Calculator
      */
     protected $order;
 
+    /**
+     * @var array|\Illuminate\Support\Collection
+     */
     protected $rules;
 
     protected $orderTotalScope;
@@ -30,7 +33,7 @@ class Calculator
         return $instance;
     }
 
-    public function withRules(array $rules)
+    public function withRules($rules)
     {
         $this->rules = $rules;
 
@@ -96,7 +99,8 @@ class Calculator
 
     protected function processRule($rule)
     {
-        $rule = (object)$rule;
+        if (is_array($rule))
+            $rule = (object)$rule;
 
         $fee = $rule->fee_type === 'percent'
             ? ($rule->fee / 100) * $this->orderTotal
@@ -112,6 +116,9 @@ class Calculator
         if ($this->beforeFilter AND call_user_func($this->beforeFilter, $rule, $this->orderTotal))
             return FALSE;
 
+        if (isset($rule->conditions))
+            return $this->evalConditions($rule->conditions);
+
         if ($rule->type === 'below')
             return $this->orderTotal < $rule->total;
 
@@ -119,5 +126,48 @@ class Calculator
             return $this->orderTotal >= $rule->total;
 
         return TRUE;
+    }
+
+    protected function evalConditions($conditions)
+    {
+        return collect($conditions)
+            ->sortBy('priority')
+            ->every(function ($condition) {
+                $attribute = array_get($condition, 'attribute');
+                $operator = array_get($condition, 'operator');
+                $conditionValue = mb_strtolower(trim(array_get($condition, 'value')));
+                $modelValue = $this->getOrderAttribute($attribute);
+
+                if ($operator == 'is')
+                    return $modelValue == $conditionValue;
+
+                if ($operator == 'is_not')
+                    return $modelValue != $conditionValue;
+
+                if ($operator == 'greater')
+                    return $modelValue > $conditionValue;
+
+                if ($operator == 'less')
+                    return $modelValue < $conditionValue;
+
+                if ($operator == 'contains')
+                    return mb_strpos($modelValue, $conditionValue) !== FALSE;
+
+                if ($operator == 'does_not_contain')
+                    return mb_strpos($modelValue, $conditionValue) === FALSE;
+
+                if ($operator == 'equals_or_greater')
+                    return $modelValue >= $conditionValue;
+
+                if ($operator == 'equals_or_less')
+                    return $modelValue <= $conditionValue;
+
+                return FALSE;
+            });
+    }
+
+    protected function getOrderAttribute($attribute)
+    {
+        return mb_strtolower(trim($this->order->{$attribute}));
     }
 }
