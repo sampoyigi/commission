@@ -7,7 +7,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class Calculator
 {
-    public $orderTotal;
+    protected $orderTotal;
+
+    protected $calculatedFee;
 
     /**
      * @var \Illuminate\Database\Eloquent\Model
@@ -19,7 +21,10 @@ class Calculator
      */
     protected $rules;
 
-    protected $orderTotalScope;
+    /**
+     * @var array|\Illuminate\Support\Collection
+     */
+    protected $totals;
 
     protected $whenMatched;
 
@@ -40,9 +45,9 @@ class Calculator
         return $this;
     }
 
-    public function applyOrderTotalScope(Closure $callback)
+    public function withTotals($totals)
     {
-        $this->orderTotalScope = $callback;
+        $this->totals = $totals;
 
         return $this;
     }
@@ -63,9 +68,9 @@ class Calculator
 
     public function calculate()
     {
-        $this->calculateOrderTotal();
+        $this->sumOrderTotal();
 
-        return collect($this->rules)
+        $calculatedFee = collect($this->rules)
             ->map(function ($rule) {
                 return $this->processRule($rule);
             })
@@ -78,6 +83,15 @@ class Calculator
 
                 return $commissionFee + $rule->calculatedFee;
             }, 0);
+
+        $this->calculatedFee = $calculatedFee;
+
+        return $this;
+    }
+
+    public function getCalculatedFee()
+    {
+        return $this->calculatedFee;
     }
 
     public function getOrderTotal()
@@ -85,16 +99,28 @@ class Calculator
         return $this->orderTotal;
     }
 
-    protected function calculateOrderTotal()
+    protected function sumOrderTotal()
     {
         $query = $this->order->orderTotalsQuery()
             ->where('order_id', $this->order->getKey())
             ->where('code', 'subtotal');
 
-        if ($this->orderTotalScope)
-            call_user_func($this->orderTotalScope, $query);
+        $totals = collect($this->totals)
+            ->where('action', 'split')
+            ->pluck('code');
 
-        $this->orderTotal = $query->sum('value');
+        if ($totals->isNotEmpty())
+            $query->whereIn('code', $totals->all());
+
+        $this->orderTotal = (float)number_format($query->sum('value'), 2, '.', '');
+    }
+
+    protected function sumOrderTotalValue($code)
+    {
+        return $this->order->orderTotalsQuery()
+            ->where('order_id', $this->order->getKey())
+            ->where('code', $code)
+            ->sum('value');
     }
 
     protected function processRule($rule)
@@ -106,7 +132,15 @@ class Calculator
             ? ($rule->fee / 100) * $this->orderTotal
             : $rule->fee;
 
-        $rule->calculatedFee = number_format($fee, 2, '.', '');
+        $calculatedFee = collect($this->totals ?? [])
+            ->filter(function ($total) {
+                return $total['action'] === 'include';
+            })
+            ->reduce(function ($calculatedFee, $total) {
+                return $calculatedFee + $this->sumOrderTotalValue($total['code']);
+            }, number_format($fee, 2, '.', ''));
+
+        $rule->calculatedFee = $calculatedFee;
 
         return $rule;
     }
